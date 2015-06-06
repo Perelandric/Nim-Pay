@@ -1,0 +1,16 @@
+
+# ignore hidden files
+.*
+!.gitignore
+
+# ignore files starting with _ which I use to designate miscellaneous files
+_*
+
+# ignore VIM temp files
+*.swp
+
+# ignore nimcache
+nimcache
+
+# ignore built test app
+nimpressive-test/app
