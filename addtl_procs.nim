@@ -1,5 +1,10 @@
 import types
 
+proc get*(self: Links, kind: string): Link =
+  for link in self:
+    if link.rel == kind:
+      return link
+
 # Refund procs
 # (none so far)
 

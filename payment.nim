@@ -1,4 +1,170 @@
+import addtl_procs
+import extras
+import marshal
+import pay
+import times
 import types
+
+
+proc newPayment*(self:var Connection, `method`: PaymentMethod,
+                                returnUrl, cancelUrl: string): PaymentRequest =
+  ## Creates a new Payment.
+  ## Use `.add()` to add Transactions to the Payment.
+  ## When ready, use `.authorize()` to gain payment authorization and
+  ## `.execute()` to execute the final, authorized payment.
+  if `method` == PaymentMethod.PayPal:
+    # Make sure we're still authenticated. Will refresh if not.
+    self.authenticate()
+
+    result = PaymentRequest(
+      intent: Intent.Sale,
+      redirect_urls: RedirectURLs (
+        return_url: return_url,
+        cancel_url: cancel_url,
+      ),
+      payer: PayerBase(
+        payment_method: `method`, # PayPal
+      ),
+      transactions: @[],
+    )
+
+
+# TODO: Because some fields are only valid when `payment_method` is `paypal`, I
+# should really have separate constructors for paypal vs non-paypal transactions.
+#
+## A PayPal payment sends a list of transactions. Use `newTransaction()` to
+## create a single transaction and then its `addItem()` method to add amounts.
+proc newTransaction*(currency: CurrencyType,
+                     shipping: float64,
+                     handling: float64,
+                     insurance: float64,
+                     shippingDiscount: float64,
+                     description: string,
+                     invoiceNumber: string,
+                     custom: string,
+                     softDescriptor: string,
+                     address: ShippingAddress,
+                     ): Transaction =
+  # Total equals sum of subtotal, shipping, tax, handling and insurance minus
+  # the shippingDiscount.
+  result.amount = TransactionAmount(
+    currency: currency,
+    # total: calculated from `details` fields
+    details: TransactionDetails(
+      # tax: calculated from `item_list` members
+      # subtotal: calculated from `item_list` members
+      shipping: shipping,
+      handling_fee: handling,
+      insurance: insurance,
+      shipping_discount: shippingDiscount,
+
+      # This field would be under `item_list`, except that it's needed for the
+      # `tax` and `subtotal` calculations, so it's here instead with an
+      # `item_list` proc in its place on the `Transaction` object.
+      item_list: ItemList(
+        shipping_address: address,
+        items: @[],
+      )
+    ),
+  )
+  result.invoice_number = invoiceNumber
+  result.custom = custom
+  result.soft_descriptor = softDescriptor
+
+
+## Add an individual amount to a Transaction. This is similar to a line item on
+## an invoice.
+## The currency type is whatever was assigned to the Transaction object.
+proc addItem*(self:var Transaction, quantity: Natural,
+                                    price, tax: float64,
+                                    name, description, sku: string) =
+  self.amount.details.item_list.items.add(Item(quantity: quantity,
+                                                name: name,
+                                                price: price,
+                                                sku: sku,
+                                                currency: self.amount.currency,
+                                                description: description,
+                                                tax: tax))
+
+# This is used because the `item_list` field of the `Transaction` object is
+# actually held in the `TransactionDetails` held by `TransactionAmount`.
+proc item_list*(self: Transaction): ItemList =
+  self.amount.details.item_list
+
+proc tax(self:TransactionDetails): float64 =
+  for item in self.item_list.items:
+    result += item.tax
+
+proc subtotal(self:TransactionDetails): float64 =
+  for item in self.item_list.items:
+    result += float64(item.quantity) * item.price
+
+
+proc total(self: TransactionAmount): float64 =
+  result = (self.details.tax() +
+            self.details.subtotal() +
+            self.details.shipping +
+            self.details.handling_fee +
+            self.details.insurance) - self.details.shipping_discount
+
+proc total(self: Amount): float64 =
+  result = (self.details.tax +
+            self.details.subtotal +
+            self.details.shipping +
+            self.details.handling_fee +
+            self.details.insurance) - self.details.shipping_discount
+
+
+
+
+proc add*(self:var PaymentRequest, trans: varargs[Transaction]) =
+  ## Add `Transaction` objects before making the request.
+  for t in trans:
+    self.transactions.add(t)
+
+
+proc send*(self:var Connection, pymtReq: PaymentRequest): Link =
+  #       When there's a valid response, redirect the user to the given
+  #       "approval_url".
+  var pymtResp = pymtReq.toSub(Payment)
+
+  self.make_request(RType.PaypalPayment, pymtReq, pymtResp)
+
+  if pymtResp.state == PaymentState.created:
+    # Return URL info for the user to redirect to for approval
+    return pymtResp.links.get("approval_url")
+  else:
+    raise new Exception # TODO: UnexpectedResponse
+
+
+proc execute*(self: Connection, query: string) =
+  # TODO: complete this method. It's all fictional right now.
+  let query = query.parse()
+
+  if query.isNil:
+    raise new Exception # Query params not valid
+
+  var payerid = query.Get("PayerID")
+  if payerid == "":
+    raise new Exception # Query params not valid
+
+  if pymt.isNil:
+    return fmt.Errorf("Payment Object is missing\n")
+
+  var pathname = "payments/payment" / pymtid / "execute"
+
+  self.make_request("POST", pathname, "{\"payer_id\":\"" & payerid & "\"}",
+                                                      "execute_", pymt, false)
+
+  if pymt.GetState() != Approved:
+#/*
+#    var s, err = json.Marshal(pymt)
+#    if err != nil {
+#      return fmt.Errorf("JSON marshal error\n")
+#    }
+#    fmt.Println(string(s))
+#*/
+    raise new Exception # Payment not approved
 
 
 # Pagination
@@ -7,11 +173,8 @@ import types
 
 # I'm going to ignore `start_index` for now since I don't see its usefulness
 
-proc getAll*(self: Payments, size: int, sort_by: sort_by_i, sort_order: sort_order_i, time_range: ...time.Time): PaymentBatcher =
-  if size < 0:
-    size = 0
-  elif size > 20:
-    size = 20
+proc getAll*(self: Connection, size: range[0..20], sortBy: SortBy,
+            sortOrder: SortOrder, timeRange: varargs[Time]): PaymentBatcher =
 
   var qry = fmt.Sprintf("?sort_order=%s&sort_by=%s&count=%d", sort_by, sort_order, size)
 
@@ -19,15 +182,19 @@ proc getAll*(self: Payments, size: int, sort_by: sort_by_i, sort_order: sort_ord
     if time_range[0].IsZero() == false:
       qry = fmt.Sprintf("%s&start_time=%s", qry, time_range[0].Format(time.RFC3339))
 
-    if len(time_range) > 1 && time_range[1].After(time_range[0]):
+    if len(time_range) > 1 and time_range[1].After(time_range[0]):
       qry = fmt.Sprintf("%s&end_time=%s", qry, time_range[1].Format(time.RFC3339))
 
   return PaymentBatcher(
     base_query: qry,
     next_id:    "",
     done:       false,
-    connection: self.connection,
+    connection: connection,
   )
+
+
+
+
 
 #/****************************************
 #
@@ -38,11 +205,11 @@ proc getAll*(self: Payments, size: int, sort_by: sort_by_i, sort_order: sort_ord
 #*****************************************/
 
 
-proc IsDone (self: PaymentBatcher): bool =
+proc isDone* (self: PaymentBatcher): bool =
   return self.done
 
-# TODO: Should `.Next()` take an optional filter function?
-proc Next (self:var PaymentBatcher): ([]*PaymentObject, error) =
+# TODO: Should `.next()` take an optional filter function?
+proc next (self:var PaymentBatcher): ([]Payment, error) =
   if self.done:
     return nil, ErrNoResults
 
@@ -79,85 +246,15 @@ proc getNextId*(self: PaymentBatcher): string =
 proc setNextId*(self:var PaymentBatcher, id: string) =
   self.next_id = id
 
-proc Get(self: Payments, payment_id: string): (*PaymentObject, error) =
-  var pymt = new(PaymentObject)
-  var err = self.connection.make_request("GET", "payments/payment/"+payment_id,
-                                          nil, "", pymt, false)
-  if err.isNil:
-    return pymt, nil
-  else:
-    return nil, err
 
-proc create(self: Payments, meth: PaymentMethod, return_url,cancel_url: string):
-                                                    (*PaymentObject, error) =
 
-  if method == PayPal:
-    # Make sure we're still authenticated. Will refresh if not.
-    var err = self.connection.authenticate()
-    if not err.isNil:
-      return nil, err
-
-    return &PaymentObject{
-      PaymentExecutor: PaymentExecutor {
-        payments:     self,
-      },
-      Intent: Sale,
-      Redirect_urls: redirects{
-        Return_url: return_url,
-        Cancel_url: cancel_url,
-      },
-      Payer: payer{
-        Payment_method: method.payment_method(), # PayPal
-      },
-      Transactions: make([]*transaction, 0),
-    }, nil
-  }
-  return nil, nil
-
-proc ParseRawData(self: Payments, rawdata: string): PaymentObject =
-  var po PaymentObject
+proc parseRawData*(self: Payments, rawdata: string): Payment =
+  var po: Payment
   var err = json.Unmarshal(rawdata, &po)
   if not err.isNil:
     return nil
-  return &po
+  result = &po
 
-proc Execute(self: Payments, pymt: PaymentFinalizer, req: *http.Request): error =
-  var query = req.URL.Query()
-
-  # TODO: Is this right? Does URL.Query() ever return nil?
-  if query.isNil:
-    return fmt.Errorf("Attempt to execute a payment that has not been approved")
-
-  var payerid = query.Get("PayerID")
-  if payerid == "":
-    payerid = pymt.GetPayerID()
-    if payerid == "":
-      return fmt.Errorf("PayerID is missing\n")
-
-  if pymt.isNil:
-    return fmt.Errorf("Payment Object is missing\n")
-
-  var pymtid = pymt.GetId()
-  if pymtid == "":
-    return fmt.Errorf("Payment ID is missing\n")
-
-  var pathname = path.Join("payments/payment", pymtid, "execute")
-
-  var err = self.connection.make_request("POST", pathname, `{"payer_id":"`+payerid+`"}`, "execute_", pymt, false)
-  if not err.isNil:
-    return err
-
-  if pymt.GetState() != Approved:
-#/*
-#    var s, err = json.Marshal(pymt)
-#    if err != nil {
-#      return fmt.Errorf("JSON marshal error\n")
-#    }
-#    fmt.Println(string(s))
-#*/
-    return fmt.Errorf("Payment with ID %q for payer %q was not approved\n", pymtid, payerid)
-
-  return nil
 
 # TODO: Should this hold the `execute` path so that it doesn't need to be constructed in `Execute()`?
 proc getState*(self: PaymentExecutor): State =
@@ -178,99 +275,48 @@ proc execute*(self: PaymentExecutor, r: *http.Request): error =
 #
 #***************************/
 
-proc getState*(self: PaymentObject): State =
+proc getState*(self: Payment): State =
   return self.State
 
-proc getId*(self: PaymentObject): string =
+proc getId*(self: Payment): string =
   return self.Id
 
-proc getPayerID*(self: PaymentObject): string =
+proc getPayerID*(self: Payment): string =
   if not self.isNil and self.Payer.Payer_info != nil:
     return self.Payer.Payer_info.Payer_id
   return ""
 
-proc MakeExecutor*(self: PaymentObject): PaymentExecutor =
+proc makeExecutor*(self: Payment): PaymentExecutor =
   return &PaymentExecutor{
-    Id: self.Id,
-    State: self.State,
+    id*: self.Id,
+    state*: self.State,
     payments: self.payments,
   }
 
-proc addTransaction*(self: PaymentObject, trans: Transaction) =
-  var t = transaction{
-    Amount: Amount{
-      Currency: trans.Currency.currency_type(),
-      Total:    trans.Total,
-    },
-    Description: trans.Description,
-  }
-  if not trans.Details.isNil:
-    t.Amount.Details = &Details{
-      Subtotal: trans.Details.Subtotal,
-      Tax:      trans.Details.Tax,
-      Shipping: trans.Details.Shipping,
-    }
-    #  Fee: "0",  # This field is only for paypal response data
-  }
 
-  if not trans.item_list.isNil:
-    var list = *trans.item_list
-    t.Item_list = &list
-
-  if not trans.ShippingAddress.isNil:
-    if t.Item_list.isNil:
-      t.Item_list = new(item_list)
-    t.Item_list.Shipping_address = trans.ShippingAddress
-  self.Transactions = append(self.Transactions, &t)
-
-# TODO: The tkn parameter is ignored, but should send a query string parameter `token=tkn`
-proc authorize*(self: PaymentObject, tkn: string): (to string, code int, err error) =
-
-  err = self.payments.connection.make_request("POST", "payments/payment", self, "send_", self, false)
-
-  if err.isNil:
-    switch self.State {
-    case Created:
-      # Set url to redirect to PayPal site to begin approval process
-      to, _ = self.Links.get("approval_url")
-      code = 303
-    default:
-      # otherwise cancel the payment and return an error
-      err = UnexpectedResponse
-    }
-
-  return to, code, err
-
-proc execute*(self: PaymentObject, req: *http.Request): error =
-  return self.payments.Execute(self, req)
-
-proc addItem*(t: Transaction, qty: uint, price: float64, curr: currency_type_i, name, sku: string) =
+proc addItem*(t: Transaction, qty: uint, price: float64, curr: CurrencyType,
+                                                          name, sku: string) =
   if t.item_list.isNil:
     t.item_list = new(item_list)
-  t.item_list.Items = append(t.item_list.Items, &item{
-    Quantity: qty,
-    Name:     name,
-    Price:    price,
-    Currency: curr.currency_type(),
-    Sku:      sku,
-  })
+
+  t.item_list.items.add(Item(
+    quantity: qty,
+    name:     name,
+    price:    price,
+    currency: curr.currency_type(),
+    sku:      sku,
+  ))
 
 # TODO: I'm returning a list of Sale objects because every payment can have multiple transactions.
 #    I need to find out why a payment can have multiple transactions, and see if I should eliminate that in the API
 #    Also, I need to find out why `related_resources` is an array. Can there be more than one per type?
-proc getSale*(self: PaymentObject): seq[SaleObject] =
+proc getSale*(self: Payment): seq[SaleObject] =
   var sales = []*SaleObject{}
   for transaction in self.Transactions:
-    for related_resource in transaction.Related_resources:
-      if not related_resource.Sale.isNil:
+    for related_resource in transaction.related_resources:
+      if not related_resource.sale.isNil:
         sales.add(related_resource.Sale)
   return sales
 
-
-proc get(l links, s string): (string, string) =
-  for i, _ in l:
-    if l[i].Rel == s:
-      return l[i].Href, l[i].Method
-  return "", ""
 
 

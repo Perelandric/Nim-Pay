@@ -1,4 +1,11 @@
 import times
+import duration
+
+# These are used to determine the settings for each HTTP request.
+type
+  RType* {.pure requiresInit.} = enum
+    Authenticate
+    PaypalPayment
 
 type
   ErrorCode* = enum
@@ -71,15 +78,8 @@ type
     connection*: Connection
 
 
-# TODO: Should this hold the `execute` path so that it doesn't need to be constructed in `Execute()`?
-  PaymentExecutor* = object
-    id*: string
-    state*: State
-    payerID*: string
-    payments*: Payments
-
   PaymentList = object
-    payments*: seq[PaymentObject]
+    payments*: seq[Payment]
     count*: int
     next_id*: string
 
@@ -137,7 +137,7 @@ type
   CreditCardState {.pure requiresInit.} = enum
     expired
     ok
-  
+
   OrderState* {.pure requiresInit.} = enum
     PENDING
     COMPLETED
@@ -262,13 +262,13 @@ type
     DESC
 
   ConnectionType* {.pure requiresInit.} = enum
-    sandbox
-    live
+    Sandbox
+    Live
 
   Intent* {.pure requiresInit.} = enum
-    Sale = "sale"
-    Authorize = "authorize"
-    Order = "order"
+    Sale = "sale" # for immediate payment
+    Authorize = "authorize" # to authorize a payment for capture later
+    Order = "order" # to create an order
 
   AddressType* {.pure requiresInit.} = enum
     Residential = "residential"
@@ -320,25 +320,292 @@ type
     TRY # Turkish lira**
     USD # United States dollar
 
+  CountryCode* {.pure requiresInit.} = enum
+    AL # ALBANIA
+    DZ # ALGERIA
+    AD # ANDORRA
+    AO # ANGOLA
+    AI # ANGUILLA
+    AG # ANTIGUA AND BARBUDA
+    AR # ARGENTINA
+    AM # ARMENIA
+    AW # ARUBA
+    AU # AUSTRALIA
+    AT # AUSTRIA
+    AZ # AZERBAIJAN
+    BS # BAHAMAS
+    BH # BAHRAIN
+    BB # BARBADOS
+    BE # BELGIUM
+    BZ # BELIZE
+    BJ # BENIN
+    BM # BERMUDA
+    BT # BHUTAN
+    BO # BOLIVIA
+    BA # BOSNIA-HERZEGOVINA
+    BW # BOTSWANA
+    BR # BRAZIL
+    BN # BRUNEI DARUSSALAM
+    BG # BULGARIA
+    BF # BURKINA FASO
+    BI # BURUNDI
+    KH # CAMBODIA
+    CA # CANADA
+    CV # CAPE VERDE
+    KY # CAYMAN ISLANDS
+    TD # CHAD
+    CL # CHILE
+    CN # CHINA (For domestic Chinese bank transactions only)
+    C2 # CHINA (For CUP, bank card and cross-border transactions)
+    CO # COLOMBIA
+    KM # COMOROS
+    CD # DEMOCRATIC REPUBLIC OF CONGO
+    CG # CONGO
+    CK # COOK ISLANDS
+    CR # COSTA RICA
+    HR # CROATIA
+    CY # CYPRUS
+    CZ # CZECH REPUBLIC
+    DK # DENMARK
+    DJ # DJIBOUTI
+    DM # DOMINICA
+    DO # DOMINICAN REPUBLIC
+    EC # ECUADOR
+    EG # EGYPT
+    SV # EL SALVADOR
+    ER # ERITERIA
+    EE # ESTONIA
+    ET # ETHIOPIA
+    FK # FALKLAND ISLANDS (MALVINAS)
+    FJ # FIJI
+    FI # FINLAND
+    FR # FRANCE
+    GF # FRENCH GUIANA
+    PF # FRENCH POLYNESIA
+    GA # GABON
+    GM # GAMBIA
+    GE # GEORGIA
+    DE # GERMANY
+    GI # GIBRALTAR
+    GR # GREECE
+    GL # GREENLAND
+    GD # GRENADA
+    GP # GUADELOUPE
+    GU # GUAM
+    GT # GUATEMALA
+    GN # GUINEA
+    GW # GUINEA BISSAU
+    GY # GUYANA
+    VA # HOLY SEE (VATICAN CITY STATE)
+    HN # HONDURAS
+    HK # HONG KONG
+    HU # HUNGARY
+    IS # ICELAND
+    IN # INDIA
+    ID # INDONESIA
+    IE # IRELAND
+    IL # ISRAEL
+    IT # ITALY
+    JM # JAMAICA
+    JP # JAPAN
+    JO # JORDAN
+    KZ # KAZAKHSTAN
+    KE # KENYA
+    KI # KIRIBATI
+    KR # KOREA, REPUBLIC OF
+    KW # KUWAIT
+    KG # KYRGYZSTAN
+    LA # LAOS
+    LV # LATVIA
+    LS # LESOTHO
+    LI # LIECHTENSTEIN
+    LT # LITHUANIA
+    LU # LUXEMBOURG
+    MG # MADAGASCAR
+    MW # MALAWI
+    MY # MALAYSIA
+    MV # MALDIVES
+    ML # MALI
+    MT # MALTA
+    MH # MARSHALL ISLANDS
+    MQ # MARTINIQUE
+    MR # MAURITANIA
+    MU # MAURITIUS
+    YT # MAYOTTE
+    MX # MEXICO
+    FM # MICRONESIA, FEDERATED STATES OF
+    MN # MONGOLIA
+    MS # MONTSERRAT
+    MA # MOROCCO
+    MZ # MOZAMBIQUE
+    NA # NAMIBIA
+    NR # NAURU
+    NP # NEPAL
+    NL # NETHERLANDS
+    AN # NETHERLANDS ANTILLES
+    NC # NEW CALEDONIA
+    NZ # NEW ZEALAND
+    NI # NICARAGUA
+    NE # NIGER
+    NU # NIUE
+    NF # NORFOLK ISLAND
+    NO # NORWAY
+    OM # OMAN
+    PW # PALAU
+    PA # PANAMA
+    PG # PAPUA NEW GUINEA
+    PE # PERU
+    PH # PHILIPPINES
+    PN # PITCAIRN
+    PL # POLAND
+    PT # PORTUGAL
+    QA # QATAR
+    RE # REUNION
+    RO # ROMANIA
+    RU # RUSSIAN FEDERATION
+    RW # RWANDA
+    SH # SAINT HELENA
+    KN # SAINT KITTS AND NEVIS
+    LC # SAINT LUCIA
+    PM # SAINT PIERRE AND MIQUELON
+    VC # SAINT VINCENT AND THE GRENADINES
+    WS # SAMOA
+    SM # SAN MARINO
+    ST # SAO TOME AND PRINCIPE
+    SA # SAUDI ARABIA
+    SN # SENEGAL
+    RS # SERBIA
+    SC # SEYCHELLES
+    SL # SIERRA LEONE
+    SG # SINGAPORE
+    SK # SLOVAKIA
+    SI # SLOVENIA
+    SB # SOLOMON ISLANDS
+    SO # SOMALIA
+    ZA # SOUTH AFRICA
+    KR # SOUTH KOREA
+    ES # SPAIN
+    LK # SRI LANKA
+    SR # SURINAME
+    SJ # SVALBARD AND JAN MAYEN
+    SZ # SWAZILAND
+    SE # SWEDEN
+    CH # SWITZERLAND
+    TW # TAIWAN, PROVINCE OF CHINA
+    TJ # TAJIKISTAN
+    TZ # TANZANIA, UNITED REPUBLIC OF
+    TH # THAILAND
+    TG # TOGO
+    TO # TONGA
+    TT # TRINIDAD AND TOBAGO
+    TN # TUNISIA
+    TR # TURKEY
+    TM # TURKMENISTAN
+    TC # TURKS AND CAICOS ISLANDS
+    TV # TUVALU
+    UG # UGANDA
+    UA # UKRAINE
+    AE # UNITED ARAB EMIRATES
+    GB # UNITED KINGDOM
+    US # UNITED STATES
+    UY # URUGUAY
+    VU # VANUATU
+    VE # VENEZUELA
+    VN # VIETNAM
+    VG # VIRGIN ISLANDS, BRITISH
+    WF # WALLIS AND FUTUNA
+    YE # YEMEN
+    ZM # ZAMBIA
 
+  ## Just the United States for now
+  StateCode* {.pure requiresInit.} = enum
+    AL # Alabama
+    AK # Alaska 
+    AZ # Arizona
+    AR # Arkansas   
+    CA # California 
+    CO # Colorado   
+    CT # Connecticut
+    DE # Delaware   
+    FL # Florida
+    GA # Georgia
+    HI # Hawaii 
+    ID # Idaho  
+    IL # Illinois   
+    IN # Indiana
+    IA # Iowa   
+    KS # Kansas 
+    KY # Kentucky   
+    LA # Louisiana  
+    ME # Maine  
+    MD # Maryland   
+    MA # Massachusetts  
+    MI # Michigan   
+    MN # Minnesota  
+    MS # Mississippi
+    MO # Missouri   
+    MT # Montana
+    NE # Nebraska   
+    NV # Nevada 
+    NH # New Hampshire  
+    NJ # New Jersey 
+    NM # New Mexico 
+    NY # New York   
+    NC # North Carolina 
+    ND # North Dakota   
+    OH # Ohio   
+    OK # Oklahoma   
+    OR # Oregon 
+    PA # Pennsylvania   
+    RI # Rhode Island   
+    SC # South Carolina 
+    SD # South Dakota   
+    TN # Tennessee  
+    TX # Texas  
+    UT # Utah   
+    VT # Vermont
+    VA # Virginia   
+    WA # Washington 
+    WV # West Virginia  
+    WI # Wisconsin  
+    WY # Wyoming
+
+    # Commonwealth/Territory: Abbreviation:
+    AS # American Samoa   
+    DC # District of Columbia 
+    FM # Federated States of Micronesia   
+    GU # Guam 
+    MH # Marshall Islands 
+    MP # Northern Mariana Islands 
+    PW # Palau
+    PR # Puerto Rico  
+    VI # Virgin Islands   
 
 #--------------------------
 # Common Payment Objects
 #--------------------------
 
 
-# Payer Object
-  Payer* = object of RootObj
+# Payer Base Object
+  ## Used to provide base information when initializing a payment.
+  PayerBase* = object of RootObj
     payment_method*: PaymentMethod
     funding_instruments*: seq[FundingInstrument]
+
+# Payer Object
+  ## Foundation for different `Payer` objects
+  Payer* = object of PayerBase
     payer_info*: PayerInfo
 
+# Payment Payer Object
+  ## Payer object for Payments
   PaymentPayer* = object of Payer
     status*: PayerStatus # Status of the payer’s PayPal account.
                          # Only supported when the payment_method is paypal.
 
 
-# Payer Info Object (pre-filled by PayPal when the `payment_method` is `paypal`)
+# Payer Info Object
+  ## Pre-filled by PayPal when the `payment_method` is `paypal`
   PayerInfo* = object
     email*: string # Email address representing the payer. 127 characters max.
     salutation*: string # Salutation of the payer.
@@ -348,8 +615,10 @@ type
     suffix*: string # Suffix of the payer.
     payer_id*: string # PayPal assigned Payer ID. Value assigned by PayPal.
     phone*: string # Phone number representing the payer. 20 characters max.
-    country_code*: string # Two-letter registered country code of the payer to
-                          # identify the buyer country.
+
+    # Country code of the payer to identify the buyer country.
+    country_code*: CountryCode
+
     shipping_address*: ShippingAddress # Shipping address of payer PayPal account.
                                        # Value assigned by PayPal.
     billing_address*: Address
@@ -360,16 +629,16 @@ type
 
 
   BaseAddress* = object of RootObj
-    line1*: string # 100 chars max; required
+    line1*: string # REQUIRED. 100 chars max.
     line2*: string # 100 chars max
-    city*: string # 50 chars max; required
-    country_code*: string # 2 chars; required
-    postal_code*: string # 20 chars max; required in some countries
+    city*: string # REQUIRED 50 chars max.
+    country_code*: CountryCode # REQUIRED
+    postal_code*: string # REQUIRED in some countries. 20 chars max.
     state*: string # 2 letter state code for US; 100 chars max for others
     phone*: string # E.123 format
 
 # Address Object (for payments)
-# This object is used for billing or shipping addresses.
+  ## This object is used for billing or shipping addresses.
   Address* = object of BaseAddress
     normalization_status*: NormalizationStatus # Only for Brazil payers
     status*: AddressStatus
@@ -424,7 +693,7 @@ type
     # A unique identifier of the bank account resource. Generated and provided
     # by the facilitator so it can be used to restrict the usage of the bank
     # account to the specific merchant.
-    external_card_id*: string 
+    external_card_id*: string
 
     create_time*: string # Resource creation time in ISO8601 date-time format
     update_time*: string #   (ex: 1994-11-05T13:15:30Z).
@@ -450,7 +719,7 @@ type
                          # for future use.
 
   Connection* = object
-    `type`*: ConnectionType
+    `type`*: ConnectionType # Sandbox or Live
     id*, secret*: string
     hosturl*: string #url.URL
     client*: string #http.Client
@@ -463,26 +732,27 @@ type
     expiration*: Time
 
 
+# Payment Request
+  ## A subset of PayPal's `Payment` object, used for the initial payment
+  ## submission.
+  PaymentRequest* = object of RootObj
+    intent*: Intent # REQUIRED.
 
+    # Source of the funds for this payment represented by a PayPal account or a
+    # direct credit card.
+    payer*: PayerBase # REQUIRED.
+
+    # Transactional details including the amount and item details.
+    transactions*: seq[Transaction] # REQUIRED.
+
+    # Returned only when payment is in created state.
+    redirect_urls*: RedirectURLs # REQUIRED for PayPal payments.
 
 
 # Payment Object
-#   (Represents a payer’s funding instrument, such as a credit card or token
-#    that represents a credit card.)
-  PaymentObject* = object
-    intent*: Intent # REQUIRED.
-                    # `sale` for immediate payment,
-                    # `authorize` to authorize a payment for capture later,
-                    # `order` to create an order.
-
-    # REQUIRED. Source of the funds for this payment represented by a PayPal
-    # account or a direct credit card.
-    payer*: PaymentPayer
-
-    transactions*: seq[Transaction] # REQUIRED. Transactional details including
-                                    # the amount and item details.
-    redirect_urls*: RedirectURLs # REQUIRED for PayPal payments.
-                              # Returned only when payment is in created state.
+  ## Represents a payer’s funding instrument, such as a credit card or token
+  ## that represents a credit card.
+  Payment* = object of PaymentRequest
     id*: string # ID of the created payment. Value assigned by PayPal.
     create_time*: string # Value assigned by PayPal.
     state*: PaymentState # Value assigned by PayPal.
@@ -496,8 +766,10 @@ type
 #    payment with the `payer_id` obtained in the web `approval_url`.)
   PaymentExecution* = object
     payerId*: string # REQUIRED. ID of the Payer, passed in return_url by PayPal.
-    transactions*: seq[Transaction] # REQUIRED. Transactional details including
-                                    #   the amount and item details.
+
+    # Transactional details including the amount and item details.
+    transactions*: seq[BaseTransaction] # REQUIRED.
+
 
 # Payment Options (payment options requested for the purchase unit)
   PaymentOptions = object
@@ -515,26 +787,35 @@ type
     cancel_url*: string # Payer is redirected here after canceling the payment.
 
 
+  # The `BaseTransaction` is used for `PaymentExecution` objects if you want to
+  # update the amount.
+  BaseTransaction* = object of RootObj
+    amount*: TransactionAmount # REQUIRED.
 
 # Transaction Object
-  Transaction = object
-    amount*: Amount # REQUIRED object
-    description*: string # 127 chars max.
-    item_list*: ItemList # Items and related shipping addr within a transaction
+  Transaction* = object of BaseTransaction
+    description*: string # Description of transaction. 127 chars max.
+
+    # TODO: This is only for responses?
     related_resources*: RelatedResources # Financial transactions for payment
-    invoice_number*: string # Invoice number used to track the payment.
-                            # Only supported when the payment_method is paypal.
-                            # 256 characters max.
-    custom*: string # Free-form field for the use of clients.
-                    # Only supported when the payment_method is set to paypal.
-                    # 256 characters max.
-    soft_descriptor*: string # Used when charging this funding source.
-                             # Only supported when the payment_method is paypal.
-                             # 22 characters max.
+
+    # Invoice number used to track the payment. Only supported when the
+    # payment_method is paypal.
+    invoice_number*: string # 256 characters max.
+
+    # Free-form field for the use of clients. Only supported when the
+    # payment_method is paypal.
+    custom*: string # 256 characters max.
+
+    # Used when charging this funding source. Only supported when the
+    # payment_method is paypal.
+    soft_descriptor*: string # 22 characters max.
+
     payment_options*: PaymentOptions # Options requested for this purchase unit.
 
-
-
+    # item_list is actually be held by `TrasactionDetails`. An `item_list` proc
+    # will fetch it from there.
+    #item_list*: ItemList # Items and related shipping addr within a transaction
 
 # Item List Object
   ItemList* = object of RootObj
@@ -543,34 +824,76 @@ type
 
 # Item Object
   Item* = object
-    quantity*: string # Number of a particular item. 10 characters max. REQUIRED.
-    name*: string # Item name. 127 characters max. REQUIRED.
-    price*: string # Item cost. 10 characters max. REQUIRED.
-    currency*: CurrencyType # 3-letter currency code. REQUIRED.
-    sku*: string # Stock keeping unit corresponding (SKU) to item. 50 char max.
-    description*: string # Description of the item. Only supported when the
-                         # payment_method is set to paypal. 127 characters max.
-    tax*: string # Tax of the item. Only supported when payment_method is paypal.
+    quantity*: Natural # REQUIRED. Number of a particular item. 10 chars max.
+    name*: string # REQUIRED. Item name. 127 chars max.
+    price*: float64 # REQUIRED. Item cost. 10 chars max.
+    currency*: CurrencyType # REQUIRED.
+    sku*: string # Stock keeping unit corresponding (SKU) to item. 50 chars max.
+
+    # Description of the item. Only supported when the payment_method is paypal.
+    description*: string # 127 characters max.
+
+    tax*: float64 # Tax of the item. Only supported when payment_method is paypal.
+
 
 # Amount Object
-  Amount = object
-    currency*: CurrencyType # 3 char currency code; required
-    total*: float64 # Total amount charged from the payer to the payee.
-                    # In case of a refund, this is the refunded amount to the
-                    # original payer from the payee.
-                    # 10 characters max with support for 2 decimal places.
-                    # REQUIRED.
+#   The difference between `Amount` and `TransactionAmount` is that a
+#   `Transaction` object also may have an `ItemList`, which has dollar amounts.
+#   These amounts would need to be coordinated with the `total` field of the
+#   `Amount` object, and as such, the `total` field is calculated on the fly for
+#   `TransactionAmount` objects, whereas all other uses of `Amount` do not have
+#   an `ItemList` that needs to be coordinated.
+#
+#   PayPal makes no such distinction in its docs, but such a distinction is
+#   implicitly required.
+  BaseAmount = object of RootObj
+    currency*: CurrencyType # REQUIRED.
+
+  # Amount object for all uses except on Transaction objects.
+  Amount* = object of BaseAmount
     details*: Details
 
+    # Total amount charged from the payer to the payee. In case of a refund,
+    # this is the refunded amount to the original payer from the payee.
+    # This will be calculated from the `Details`.
+    #total*: float64 # REQUIRED. 10 chars max with support for 2 decimal places.
+
+  # Amount object for Transaction objects.
+  TransactionAmount* = object of BaseAmount
+    details*: TransactionDetails
+    # This will be calculated from the `TransactionDetails`.
+    #total*: float64 # REQUIRED. 10 chars max with support for 2 decimal places.
+
+
+
 # Details Object (amount details)
-  Details* = object
+#   As described above for `Amount` objects, a `Transaction` object has an
+#   `ItemList` with dollar amounts that must be coordinated with the `subtotal`
+#   and `tax` fields.
+#
+#   As such, we have a `TransactionDetails` object for `TransactionAmount`
+#   objects and a `Details` object for `Amount` objects.
+  BaseDetails = object of RootObj
     shipping*: float64 # 10 chars max, with support for 2 decimal places
-    subtotal*: float64 # 10 chars max, with support for 2 decimal places
-                       # REQUIRED if line items are specified
-    tax*: float64 # 10 chars max, with support for 2 decimal places
     handling_fee*: float64  # When `payment_method` is `paypal`
     insurance*: float64  # When `payment_method` is `paypal`
     shipping_discount*: float64  # When `payment_method` is `paypal`
+
+  Details* = object of BaseDetails
+    subtotal*: float64 # 10 chars max, with support for 2 decimal places
+                       # REQUIRED if line items are specified
+    tax*: float64 # 10 chars max, with support for 2 decimal places
+
+# Transaction Details Object
+#   Like `Details`, but used with `TransactionAmount` objects, so that its `tax`
+#   and `subtotal` can be calculated from its `item_list`.
+  TransactionDetails* = object of BaseDetails
+#   The `tax` and `subtotal` will be calculated via procs
+#
+#   An ItemList is normally held by the `Transaction` object, but is held here
+#   instead so that the `tax` and `subtotal` procs have access to it.
+    item_list*: ItemList
+
 
   Links* = seq[Link]
 
@@ -587,7 +910,7 @@ type
     amount*: Amount
     create_time*: string # Value assigned by PayPal.
     update_time*: string #   in http://tools.ietf.org/html/rfc3339#section-5.6
-  
+
   BaseTransmissionWithElig = object of BaseTransmission
     clearing_time*: string # Expected clearing time for eCheck transactions.
                            # Only supported when the `payment_method` is set to
@@ -648,7 +971,7 @@ type
                            # for that buyer.
     receipt_id*: string # 16-digit payment identification number returned for
                         # guest users to identify the payment.
- 
+
 
 # Authorization Object
   Authorization* = object of BaseTransmissionWithEligModeAndParent
@@ -763,7 +1086,7 @@ type
 
     # REQUIRED. Number of cycles in this payment definition. For INFINITE type
     # plans, cycles should be set to 0 for a REGULAR type payment_definition.
-    cycles*: string 
+    cycles*: string
 
     # REQUIRED. Amount that will be charged at the end of each cycle for this def.
     amount*: Currency
@@ -866,7 +1189,7 @@ type
     Reactivated
     Canceled
     Completed
-  
+
 # Agreement Object
   Agreement* = object
     id*: string # Identifier of the agreement. Assigned in response.
@@ -1037,7 +1360,7 @@ type
     # Note for notifications. The note is provided by the payment sender.
     # This note can be any string.
     note*: string # 4000 characters max. Assigned in response.
- 
+
     # The receiver of the payment. In a call response, the format of this value
     # corresponds to the recipient_type specified in the request.
     receiver*: string # REQUIRED. 127 characters max.
@@ -1142,7 +1465,8 @@ type
     # The lifetime of the access token in seconds. After the access token
     # expires, use the refresh_token to refresh the access token.
     # https://developer.paypal.com/webapps/developer/docs/api/#grant-token-from-refresh-token
-    expires_in*: uint
+    expires_in*: Seconds
+    expiration*: Duration
 
 
 # XXX: These were in the original code for some reason.
@@ -1439,6 +1763,7 @@ type
 #   Representation of a phone number.
   Phone* = object
     # Country code (in E.164 format).
+    # TODO: Need list in E.164 format.
     country_code*: string # REQUIRED. Assume length is n.
 
     # In-country phone number (in E.164 format).
@@ -1591,7 +1916,7 @@ type
 
     # A string containing a JSON Pointer value that references the location in
     # the target document to move the value from.
-    `from`*: string 
+    `from`*: string
 
 
 # Web Profile List Object
@@ -1632,7 +1957,7 @@ type
 
 # Event List Object
 #   List of Webhooks event resources
-  EventList* = object  
+  EventList* = object
     events*: seq[Event] # A list of Webhooks event resources
 
     # Number of items returned in each range of results. Note that the last
@@ -1746,7 +2071,7 @@ type
     error_message*: string # REQUIRED. Error message providing description of error
 
     # Status of the error. Acceptable status at this point are OPEN and RESOLVED.
-    status*: WebhookErrorStatus # Default is OPEN 
+    status*: WebhookErrorStatus # Default is OPEN
 
     links*: Links # HATEOAS links related to this call.
 
@@ -1781,14 +2106,17 @@ proc fetch*[T](self: Connection, data_id: string): T =
               "payments/authorization"
             elif T of Capture:
               "payments/capture"
+            elif T of Payment:
+              "payments/payment"
             else:
               "payments/refund"
-  var sale = new(T)
+  result = new(T)
 
-  self.make_request("GET", url / data_id, nil, "", sale, false)
+  self.make_request("GET", url / data_id, nil, "", result, false)
     # TODO: Transfer JSON data to data object
 
-proc fetchParentPayment*[T](self: Connection, data: T): PaymentObject =
+
+proc fetchParent*[T](self: Connection, data: T): T =
   #TODO: This will instead call the getPayment method when I make it.
   return self.fetch(data.parent_payment)
 
@@ -1805,9 +2133,10 @@ proc do_refund[T](self: Connection, data: T, ref_req: auto): T =
   self.make_request("POST", url / data.id / "refund", ref_req, "", ref_resp, false)
 
 # the Amount must include the PayPal fee paid by the Payee
-proc refund(self: Connection, amt: Amount): RefundObject =
-  return self.do_refund(&RefundObject{_trans: _trans{Amount: amt}})
+proc refund(self: Connection, amt: Amount): Refund =
+  return self.do_refund(&Refund{_trans: _trans{Amount: amt}})
 
-proc fullRefund(self: Connection): RefundObject =
-  return self.do_refund(&RefundObject{_trans: _trans{Amount: self.Amount}})
+proc fullRefund(self: Connection): Refund =
+  return self.do_refund(&Refund{_trans: _trans{Amount: self.Amount}})
+
 
